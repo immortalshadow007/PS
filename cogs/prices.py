@@ -14,30 +14,56 @@ class Moni(commands.Cog):
         self.guild_data = {} 
         self.previous_matic_price = None
         self.last_known_transaction = None
-        self.semaphore = asyncio.Semaphore(4)  
-        # self.bot.loop.create_task(self.price_check_and_alert())
+        self.semaphore = asyncio.Semaphore(4)   
+        
+    def start_tasks(self):
+        self.bot.loop.create_task(self.price_check_and_alert())
         self.bot.loop.create_task(self.update_crypto_presence())
-        #self.bot.loop.create_task(self.monitor_wallet_transactions())
+        self.bot.loop.create_task(self.monitor_wallet_transactions())
 
     @commands.slash_command(name="set_transaction_channel", description="Set the channel for transaction alerts.")
     async def set_transaction_channel(self, ctx, channel: disnake.TextChannel):
+        await ctx.response.defer()
         set_transaction_channel(ctx.guild.id, channel.id)
-        await ctx.response.send_message(f"Transaction channel has been set to {channel.mention}")
+        embed = disnake.Embed(title="Transaction channel is updated!", color=0x9C84EF) 
+        embed.set_author(name="PS Scanner", url="https://polygonscan-scrapper.ovoono.studio/", icon_url="https://i.imgur.com/97feYXR.png") 
+        embed.set_thumbnail(url=f"{ctx.guild.icon.url}")
+        embed.add_field(name="Channel ID:", value=f"{channel.mention}", inline=True)
+        embed.set_footer(text="Powered by OvoOno Studio")
+        await ctx.followup.send(embed=embed) 
 
     @commands.slash_command(name="set_price_alert_channel", description="Set the channel for price alerts.")
     async def set_price_alert_channel(self, ctx, channel: disnake.TextChannel):
+        await ctx.response.defer()
         set_price_alert_channel(ctx.guild.id, channel.id)
-        await ctx.response.send_message(f"Price alert channel has been set to {channel.mention}")
+        embed = disnake.Embed(title="Price alert channel is updated!", color=0x9C84EF) 
+        embed.set_author(name="PS Scanner", url="https://polygonscan-scrapper.ovoono.studio/", icon_url="https://i.imgur.com/97feYXR.png") 
+        embed.set_thumbnail(url=f"{ctx.guild.icon.url}")
+        embed.add_field(name="Channel ID:", value=f"{channel.mention}", inline=True)
+        embed.set_footer(text="Powered by OvoOno Studio")
+        await ctx.followup.send(embed=embed)
 
     @commands.slash_command(name="set_wallet_address", description="Set the wallet address for monitoring incoming transactions.")
     async def set_wallet_address(self, ctx, address: str):
+        await ctx.response.defer()
         set_wallet_address(ctx.guild.id, address)
-        await ctx.response.send_message(f"Wallet address has been set to `{address}`")
+        embed = disnake.Embed(title="Wallet address for monitoring is updated!", color=0x9C84EF) 
+        embed.set_author(name="PS Scanner", url="https://polygonscan-scrapper.ovoono.studio/", icon_url="https://i.imgur.com/97feYXR.png") 
+        embed.set_thumbnail(url=f"{ctx.guild.icon.url}")
+        embed.add_field(name="Wallet address:", value=f"{address}", inline=True)
+        embed.set_footer(text="Powered by OvoOno Studio")
+        await ctx.followup.send(embed=embed)
 
     @commands.slash_command(name="set_moni_token", description="Set the ERC20 Token for monitoring.")
     async def set_moni_token(self, ctx, token: str):
+        await ctx.response.defer()
         set_moni_token(ctx.guild.id, token)
-        await ctx.response.send_message(f"Token for monitoring has been set to `{token}`")
+        embed = disnake.Embed(title="Token for monitoring is updated!", color=0x9C84EF) 
+        embed.set_author(name="PS Scanner", url="https://polygonscan-scrapper.ovoono.studio/", icon_url="https://i.imgur.com/97feYXR.png") 
+        embed.set_thumbnail(url=f"{ctx.guild.icon.url}")
+        embed.add_field(name="Token Name:", value=f"{token}", inline=True)
+        embed.set_footer(text="Powered by OvoOno Studio")
+        await ctx.followup.send(embed=embed)
 
     async def get_coin_data(self):
         try:
@@ -79,20 +105,20 @@ class Moni(commands.Cog):
             volume_24h = coin_data['market_data']['total_volume']['usd']
             market_cap = coin_data['market_data']['market_cap']['usd']
 
+            embed = disnake.Embed(title="🚨 **PRICE ALERT** 🚨\n\n", color=0x9C84EF) 
+            embed.set_author(name="PS Scanner", url="https://polygonscan-scrapper.ovoono.studio/", icon_url="https://i.imgur.com/97feYXR.png") 
+            embed.set_footer(text="Powered by OvoOno Studio")
             for guild in self.bot.guilds:
                 price_alert_channel_id = get_price_alert_channel(guild.id)
                 channel = self.bot.get_channel(price_alert_channel_id)
                 if channel is not None:
-                    print(f'Sending price alert to: {channel}')
-                    await channel.send(
-                        f".\n\n"
-                        f"🚨 **PRICE CHANGE ALERT** 🚨\n\n"
-                        f"💵 **ETH Price:** ${current_price:.2f} {arrow_emoji} ({abs(price_change):.2f}% change)\n"
-                        f"📈 **24h High:** ${price_high_24h:.2f}\n"
-                        f"📉 **24h Low:** ${price_low_24h:.2f}\n"
-                        f"💼 **24h Volume:** ${volume_24h:.2f}\n"
-                        f"💰 **Market Cap:** ${market_cap:.2f}\n"
-                    )
+                    # print(f'Sending price alert to: {channel}') 
+                    embed.add_field(name="💵 **Price:**", value=f'${current_price:.2f} {arrow_emoji} ({abs(price_change):.2f}% change)', inline=False)
+                    embed.add_field(name="📈 **24h High:**", value=f'${price_high_24h:.2f}', inline=True)
+                    embed.add_field(name="📉 **24h Low:**", value=f'${price_low_24h:.2f}', inline=True)
+                    embed.add_field(name="💼 **24h Volume:**", value=f'${volume_24h:.2f}', inline=True)
+                    embed.add_field(name="💰 **Market Cap:**", value=f'${market_cap:.2f}', inline=True)
+                    await channel.send(embed=embed)
                 else:
                     print('No channel optimized')
 
@@ -103,7 +129,7 @@ class Moni(commands.Cog):
 
     async def price_check_and_alert(self):
         await self.bot.wait_until_ready()
-        
+        print('price_check_and_alert triggered.')
         while not self.bot.is_closed():
             try:
                 current_price, _, _, _, _, _, _ = await self.get_crypto_price_data()
@@ -121,7 +147,7 @@ class Moni(commands.Cog):
     
     async def update_crypto_presence(self):
         await self.bot.wait_until_ready()
-
+        print('update_crypto_presence triggered.')
         while not self.bot.is_closed():
             try:
                 price, price_change_percent, coin_data, *_ = await self.get_crypto_price_data()
@@ -187,7 +213,7 @@ class Moni(commands.Cog):
 
                     last_transaction = None
                     for transaction in transactions:
-                        if transaction["to"].lower() == self.guild_data[guild_id]["wallet_address"].lower():
+                        if transaction["to"].lower() == self.guild_data[guild_id]["wallet_address"].lower() or transaction["from"].lower() == self.guild_data[guild_id]["wallet_address"].lower():
                             last_transaction = transaction
                             print(f"Found transaction for {self.guild_data[guild_id]['wallet_address']} with hash {transaction['hash']}")
                             await asyncio.sleep(3)  # Add delay here
@@ -233,12 +259,14 @@ class Moni(commands.Cog):
             moni_contract  = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
         if self.guild_data[guild_id]["moni_token"] == 'DAI':
             moni_contract  = '0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063'
+        if self.guild_data[guild_id]["moni_token"] == 'SNAKE':
+            moni_contract = '0xF9978935B557140de50c82D10ab046D33D57B5e5'
 
         url = f"{self.polygon_scan_api_url}&address={self.guild_data[guild_id]['wallet_address']}&contractaddress={moni_contract}&sort=desc"
         try:
             json_data = await self.limited_get(url)
             if json_data and "result" in json_data:
-                #print(f'Transaction fetched for Guild: {guild_id}')
+                print(f'Transaction fetched for Guild: {guild_id}')
                 return json_data["result"]
             else:
                 #print(f"Error in fetch_wallet_transactions: {json_data}")
@@ -260,7 +288,7 @@ class Moni(commands.Cog):
         try:
             channel = await self.bot.fetch_channel(self.guild_data[guild_id]["transaction_channel_id"])
             if channel:
-                # print(f"Sending message to channel {channel.id}")  # Debugging print statement
+                print(f"Sending message to channel {channel.id}")  # Debugging print statement
                 message = (
                     f"🚨 New incoming {self.guild_data[guild_id]['moni_token']} token transaction to `{self.guild_data[guild_id]['wallet_address']}` 🚨\n"
                     f"💰 Value: {float(transaction['value'])} {self.guild_data[guild_id]['moni_token']} \n"

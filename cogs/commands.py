@@ -1,14 +1,14 @@
 import json
 import requests
 import disnake
-import time 
+import time  
+import csv
+import io
+import os
 from disnake.ext import commands
 from disnake.ext.commands import has_permissions
 from disnake import Option, OptionType, Embed, Color
 from datetime import datetime
-import csv
-import io
-import os
 from io import StringIO
 from config import APIKey, API2Key
 from checks import is_donator 
@@ -19,11 +19,18 @@ class Scrape(commands.Cog):
         self.key = str(APIKey)
 
     @staticmethod
-    def get_token_holders(token_address, num_transactions=1000, page_size=100, num_pages=40):
-        holders = set() 
-        key = str(APIKey)
-        for page in range(1, num_pages + 1):
-            url = f'https://api.polygonscan.com/api?module=account&action=tokentx&contractaddress={token_address}&page={page}&offset={page_size}&sort=desc&apikey={key}'
+    def get_token_holders(token_address, blockchain, page_size=100, num_pages=40):
+        holders = set()  
+        key = APIKey
+        key2 = API2Key  
+        
+        for page in range(1, num_pages + 1): 
+            if blockchain.lower() == "ethereum":
+                url = f"https://api.etherscan.io/api?module=account&action=tokentx&contractaddress={token_address}&page={page}&offset={page_size}&sort=desc&apikey={str(key2)}" 
+            elif blockchain.lower() == "polygon":
+                url = f"https://api.polygonscan.com/api?module=account&action=tokentx&contractaddress={token_address}&page={page}&offset={page_size}&sort=desc&apikey={str(key)}" 
+            else: 
+                return
             response = requests.get(url)
             data = json.loads(response.text)
 
@@ -57,19 +64,37 @@ class Scrape(commands.Cog):
     Define get_token_holder - send CSV file as DM of token holders wallets .
     """
     @is_donator()
-    @commands.slash_command(name='get_token_holders', description="Send CSV file of token holders as DM")
-    async def get_token_holder(self, ctx, token_address: str = None):
+    @commands.slash_command(
+        name='get_token_holder', 
+        description="Send CSV file of token holders as DM",
+        options=[
+            disnake.Option(
+                    'token_address', 'Token Smart Contract',
+                    type=disnake.OptionType.string, 
+                    required=True
+                ),
+            disnake.Option(
+                name="blockchain",
+                description="Choose Ethereum or Polygon",
+                type=OptionType.string,
+                choices=["ethereum", "polygon"],
+                required=True
+            ),
+        ]
+    )
+    async def get_token_holder(self, ctx, token_address: str, blockchain: str):
+        await ctx.response.defer()
         if token_address is None:
-            await ctx.send("Please provide a valid token address.")
+            await ctx.followup.send(content="Please provide a valid token address.")
             return
 
-        holders = self.get_token_holders(token_address)
+        holders = self.get_token_holders(token_address, blockchain)
         if holders is None:
-            await ctx.send("Failed to fetch token holders. Please check the token address and try again.")
+            await ctx.followup.send(content="Failed to fetch token holders. Please check the token address and try again.")
         else:
             print("Sending CSV file...") 
             await self.send_csv(ctx, holders)
-            await ctx.send("Token holders list sent as a CSV file in a direct message.")
+            await ctx.followup.send(content="Token holders list sent as a CSV file in a direct message.")
 
     """
     Define load_contract_addresses - load contracts.json file for token/contract addresses.
@@ -147,10 +172,11 @@ class Scrape(commands.Cog):
     """
     Define handle_erc_transactions - check CSV file for transaction.
     """
-    async def handle_erc_transactions(self, ctx, address, contract, offset, contract_type, counter=0):
-        print(f"Inside handle_erc_transactions - Contract: {contract_type}")  # Add this print statement
+    async def handle_erc_transactions(self, ctx, address, contract, offset, contract_type, blockchain, counter=0):
+        # print(f"Inside handle_erc_transactions - Contract: {contract_type}")  # Add this print statement
         contracts_data = self.load_contract_addresses() 
-        contract_address = contracts_data.get(contract_type, {}).get(contract, None)
+        blockchain_data = contracts_data.get(blockchain.lower(), {})
+        contract_address = blockchain_data.get(contract_type, {}).get(contract, None)
         if not contract_address:
             return await ctx.send(f"Unknown contract '{contract}' for type {contract_type}")
         
@@ -162,7 +188,15 @@ class Scrape(commands.Cog):
         if contract_type == "ERC1155":
             action = "token1155tx"
         
-        endpoint = f'https://api.polygonscan.com/api?module=account&action={str(action)}&contractaddress={str(contract_address)}&address={str(address)}&startblock=0&endblock=99999999&page=1&offset={str(offset)}&sort=desc&apikey={str(self.key)}'
+        key = APIKey
+        key2 = API2Key
+            
+        endpoint = '' 
+        if blockchain.lower() == "ethereum": 
+            endpoint = f'https://api.etherscan.io/api?module=account&action={str(action)}&contractaddress={str(contract_address)}&address={str(address)}&startblock=0&endblock=99999999&page=1&offset={str(offset)}&sort=desc&apikey={str(key2)}'
+        if blockchain.lower() == "polygon":
+            endpoint = f'https://api.polygonscan.com/api?module=account&action={str(action)}&contractaddress={str(contract_address)}&address={str(address)}&startblock=0&endblock=99999999&page=1&offset={str(offset)}&sort=desc&apikey={str(key)}'
+        
         r = requests.get(endpoint)
         data = json.loads(r.text) 
 
@@ -233,15 +267,40 @@ class Scrape(commands.Cog):
     """
     Define checkTrx() - check status of transaction by hash.
     """
-    @commands.command() 
-    async def checkTrx(self, ctx: commands.Context, hash: str): 
-        author = ctx.author.mention
-        api_key = self.key
-        counter = 0
-        endpoint = f'https://api.polygonscan.com/api?module=transaction&action=gettxreceiptstatus&txhash={str(hash)}&apikey={str(api_key)}'
-        response = requests.get(endpoint)  
+    @commands.slash_command(
+            name='check_trx',
+            description='Check status of transaction by hash.',
+            options=[
+                disnake.Option(
+                    'hash', 'Transaction Hash',
+                    type=disnake.OptionType.string, 
+                    required=True
+                ),
+                disnake.Option(
+                    name="blockchain",
+                    description="Choose Ethereum or Polygon",
+                    type=OptionType.string,
+                    choices=["ethereum", "polygon"],
+                    required=True
+                ),
+            ]
+    ) 
+    async def check_trx(self, ctx, hash: str, blockchain: str):
+        await ctx.response.defer() 
+        key = APIKey
+        key2 = API2Key
+        author = ctx.author.mention 
+
+        if blockchain.lower() == "ethereum":
+            url = f"https://api.etherscan.io/api?module=transaction&action=gettxreceiptstatus&txhash={str(hash)}&apikey={str(key2)}" 
+        elif blockchain.lower() == "polygon":
+            url = f"https://api.polygonscan.com/api?module=transaction&action=gettxreceiptstatus&txhash={str(hash)}&apikey={str(key)}" 
+        else:
+            await ctx.response.send_message("Invalid blockchain choice, choose either Ethereum or Polygon")
+            return
+        response = requests.get(url)  
         data = json.loads(response.text)
-        print(f"User - {author} trigger command checkTrx for {hash} transaction.")
+        # print(f"User - {author} trigger command checkTrx for {hash} transaction.")
         await ctx.send(f"Return status of transaction with {str(hash)} - sent DM to {author}") 
 
         status = ''
@@ -252,7 +311,7 @@ class Scrape(commands.Cog):
         
         embed = disnake.Embed(
             title=f"Status of transaction with hash {str(hash)}",
-            description="Return status code of transaction.",
+            description=f"Return status code of transaction on {str(blockchain)}.",
             color=0x9C84EF,
             timestamp=datetime.now()
         )
@@ -264,7 +323,7 @@ class Scrape(commands.Cog):
         )
 
         embed.set_footer(
-            text=f"Requested by {ctx.author}"
+            text="Powered by OvoOno Studio"
         )
          
         await ctx.author.send(embed=embed) 
@@ -272,9 +331,33 @@ class Scrape(commands.Cog):
     """
     Define getTrxHash() - return a link to for specific transaction hash.
     """
-    @commands.command()
-    async def getTrxHash(self, ctx: commands.Context, hash: str): 
+    @commands.slash_command(
+            name='get_trx_hash',
+            description='Return a link for transaction hash.',
+            options=[
+                disnake.Option(
+                    'hash', 'Transaction hash.',
+                    type=disnake.OptionType.string, 
+                    required=True
+                ),
+                disnake.Option(
+                    name="blockchain",
+                    description="Choose Ethereum or Polygon",
+                    type=OptionType.string,
+                    choices=["ethereum", "polygon"],
+                    required=True
+                ),
+            ]
+    )
+    async def get_trx_hash(self, ctx, hash: str, blockchain: str): 
         author = ctx.author.mention 
+
+        value = ''
+        if blockchain.lower() == "ethereum":
+            value = f'https://etherscan.io/tx/{str(hash)}'
+        if blockchain.lower() == "polygon":
+            value = f'https://polygonscan.com/tx/{str(hash)}'
+        
         # await ctx.send(f'https://polygonscan.com/tx/{str(hash)}') 
         print(f"User - {author} trigger command getTrxHash for {hash} transaction.")
         await ctx.send(f"Generating link for transaction with {str(hash)} - sent DM to {author}")
@@ -286,7 +369,7 @@ class Scrape(commands.Cog):
         ) 
         embed.add_field(
             name="Link of Transaction Hash:",
-            value=f'https://polygonscan.com/tx/{str(hash)}',
+            value=f'{value}',
             inline=False
         )   
         embed.set_footer(
@@ -297,20 +380,53 @@ class Scrape(commands.Cog):
     """
     Define getTrx() - function that will fetch all normal transactions for specific address. 
     """
-    @commands.command()
-    async def getTrx(self, ctx: commands.Context, address: str, offset: str):
+    @commands.slash_command(
+            name="get_trx",
+            description="Fetch all normal transaction for specific address.",
+            options=[
+                disnake.Option(
+                    "address", "Wallet.", 
+                    type=disnake.OptionType.string, 
+                    required=True
+                ),
+                disnake.Option(
+                    name="blockchain",
+                    description="Choose Ethereum or Polygon",
+                    type=OptionType.string,
+                    choices=["ethereum", "polygon"],
+                    required=True
+                ),
+                disnake.Option(
+                    name="offset",
+                    description="Choose offset.",
+                    type=disnake.OptionType.string,
+                    required=True
+                )
+            ]
+    )
+    async def get_trx(self, ctx, address: str, blockchain: str, offset: str):
+        await ctx.response.defer() 
         if(int(offset) > 25):
             await ctx.send(f"Maximum offset must be lower then 25! Aborting the command.")
             return
         
-        author = ctx.author.mention
-        api_key = self.key    
-        counter = 0
-        endpoint = f'https://api.polygonscan.com/api?module=account&action=txlist&address={str(address)}&startblock=0&endblock=99999999&page=1&offset={str(offset)}&sort=desc&apikey={str(api_key)}'
-        response = requests.get(endpoint)  
+        key = APIKey
+        key2 = API2Key
+        author = ctx.author.mention 
+        counter = 0 
+
+        if blockchain.lower() == "ethereum":
+            url = f"https://api.etherscan.io/api?module=account&action=txlist&address={str(address)}&startblock=0&endblock=99999999&page=1&offset={str(offset)}&sort=desc&apikey={str(key2)}" 
+        elif blockchain.lower() == "polygon":
+            url = f"https://api.polygonscan.com/api?module=account&action=txlist&address={str(address)}&startblock=0&endblock=99999999&page=1&offset={str(offset)}&sort=desc&apikey={str(key)}" 
+        else:
+            await ctx.response.send_message("Invalid blockchain choice, choose either Ethereum or Polygon")
+            return 
+        
+        response = requests.get(url)  
         data = json.loads(response.text)
         author = ctx.author.mention
-        print(f"User - {author} trigger command getTrx for {address} wallet address.")
+        # print(f"User - {author} trigger command getTrx for {address} wallet address.")
         await ctx.send(f"Listing last {offset} internal transactions for **{address}** - sent DM to {author}")
         embed = disnake.Embed(
             title=f"{str(offset)} transactions of {str(address)}",
@@ -339,15 +455,42 @@ class Scrape(commands.Cog):
     """
     Define balance() - get amount in WEI for single address. 
     """
-    @commands.command()
-    async def balance(self, ctx: commands.Context, address: str): 
-        api_key = self.key
-        author = ctx.author.mention
-        endpoint = f'https://api.polygonscan.com/api?module=account&action=balance&address={str(address)}&apikey={str(api_key)}'
-        response = requests.get(endpoint)  
+    @commands.slash_command(
+            name="balance",
+            description="get amount in WEI for wallet",
+            options=[
+                disnake.Option(
+                    "address", "Wallet.", 
+                    type=disnake.OptionType.string, 
+                    required=True
+                ),
+                disnake.Option(
+                    name="blockchain",
+                    description="Choose Ethereum or Polygon",
+                    type=OptionType.string,
+                    choices=["ethereum", "polygon"],
+                    required=True
+                )
+            ]
+    )
+    async def balance(self, ctx, address: str, blockchain: str):
+        await ctx.response.defer() 
+        key = APIKey
+        key2 = API2Key
+
+        if blockchain.lower() == "ethereum":
+            url = f"https://api.etherscan.io/api?module=account&action=balance&address={str(address)}&apikey={str(key2)}" 
+        elif blockchain.lower() == "polygon":
+            url = f"https://api.polygonscan.com/api?module=account&action=balance&address={str(address)}&apikey={str(key)}" 
+        else:
+            await ctx.response.send_message("Invalid blockchain choice, choose either Ethereum or Polygon")
+            return
+        
+        author = ctx.author.mention 
+        response = requests.get(url)  
         data = json.loads(response.text) 
-        amount = float(data['result']) / ( 10 ** 18 ) # Convert WEI to MATIC  
-        await ctx.send(f"Sending MATIC balance for **{address}** - sent DM to {author}") 
+        amount = float(data['result']) / ( 10 ** 18 )
+        await ctx.send(f"Sending {blockchain} balance for **{address}** - sent DM to {author}") 
         embed = disnake.Embed(
             title=f"Get balance for {str(address)}",
             description="Return amount in WEI (converted) for single address",
@@ -355,7 +498,7 @@ class Scrape(commands.Cog):
             timestamp=datetime.now()
         ) 
         embed.add_field(
-            name="Amount in MATIC:",
+            name="Amount:",
             value=amount,
             inline=False
         )   
@@ -363,26 +506,47 @@ class Scrape(commands.Cog):
             text=f"Requested by {ctx.author}"
         ) 
 
-        await ctx.author.send(embed=embed) 
-
+        await ctx.author.send(embed=embed)
     
     """
     Define creator() - Returns a contract's deployer address and transaction hash it was created, up to 5 at a time. 
     """    
-    @commands.command()
-    async def creator(self, ctx: commands.Context, *addresses: str):
-        author = ctx.author.mention
+    @commands.slash_command(
+            name="creator",
+            description="Returns a contract's deployer address and transaction hash it was created, up to 5 at a time.",
+            options=[
+                disnake.Option(
+                    "address", "Contract address.", 
+                    type=disnake.OptionType.string, 
+                    required=True
+                ),
+                disnake.Option(
+                    name="blockchain",
+                    description="Choose Ethereum or Polygon",
+                    type=OptionType.string,
+                    choices=["ethereum", "polygon"],
+                    required=True
+                )
+            ]
+    )
+    async def creator(self, ctx, address: str, blockchain: str):
+        await ctx.response.defer()
+        addresses_str = address
+        key = APIKey
+        key2 = API2Key
 
-        # Concatenate all addresses into a comma-separated string
-        addresses_str = ','.join(addresses)
-
-        # Fetch the contract creation data from the API
-        url = f"https://api.polygonscan.com/api?module=contract&action=getcontractcreation&contractaddresses={addresses_str}&apikey={str(APIKey)}"
+        if blockchain.lower() == "ethereum":
+            url = f"https://api.etherscan.io/api?module=contract&action=getcontractcreation&contractaddresses={str(addresses_str)}&apikey={str(key2)}" 
+        elif blockchain.lower() == "polygon":
+            url = f"https://api.polygonscan.com/api?module=contract&action=getcontractcreation&contractaddresses={str(addresses_str)}&apikey={str(key)}" 
+        else:
+            await ctx.response.send_message("Invalid blockchain choice, choose either Ethereum or Polygon")
+            return
+ 
         response = requests.get(url)
         data = json.loads(response.text)
-        results = data['result']
-
-        message = f"**Contract Creator and Creation Tx Hash**\n"
+        results = data['result'] 
+        message = "**Contract Creator and Creation Tx Hash**\n"
 
         # Loop through results to format the message
         for result in results:
@@ -403,30 +567,59 @@ class Scrape(commands.Cog):
         await ctx.author.send(message)
 
     """
-    Define abi() - Returns the contract Application Binary Interface ( ABI ) of a verified smart contract. 
+    Define abi() - Returns the contract Application Binary Interface (ABI) of a verified smart contract. 
     """
-    @commands.command()
-    async def abi(self, ctx: commands.Context, address: str):
+    @commands.slash_command(
+        name="abi",
+        description="Returns the contract Application Binary Interface (ABI) of a verified smart contract.",
+        options=[
+            disnake.Option(
+                "address", "Contract address.", 
+                type=disnake.OptionType.string, 
+                required=True
+            ),
+            disnake.Option(
+                name="blockchain",
+                description="Choose Ethereum or Polygon",
+                type=OptionType.string,
+                choices=["ethereum", "polygon"],
+                required=True
+            )
+        ]
+    )
+    async def abi(self, ctx, address: str, blockchain: str):
+        await ctx.response.defer()
         key = APIKey
-        url = f"https://api.polygonscan.com/api?module=contract&action=getabi&address={str(address)}&apikey={str(key)}"
+        key2 = API2Key
+
+        if blockchain.lower() == "ethereum":
+            url = f"https://api.etherscan.io/api?module=contract&action=getabi&address={str(address)}&apikey={str(key2)}"
+            blockchain_name = "Ethereum"
+        elif blockchain.lower() == "polygon":
+            url = f"https://api.polygonscan.com/api?module=contract&action=getabi&address={str(address)}&apikey={str(key)}"
+            blockchain_name = "Polygon"
+        else:
+            await ctx.response.send_message("Invalid blockchain choice, choose either Ethereum or Polygon")
+            return
+        
         response = requests.get(url)
         data = json.loads(response.text)
 
-        # Parse the 'result' string into a Python object
         abi = json.loads(data['result'])
         pretty_abi = json.dumps(abi, indent=4)
-        
-        # Create a temporary file
         temp_file = f'abi_{address}.json'
 
-        # Write the ABI to the file
+        embed = Embed(title=f"ABI Verification for {address}")
+        embed.set_author(name="PS Scanner", url="https://polygonscan-scrapper.ovoono.studio/", icon_url="https://i.imgur.com/97feYXR.png")
+        embed.add_field(name="Message:", value=f"Sending ABI JSON for **{address} on {blockchain_name} blockchain**")
+        embed.set_footer(text=f"Requested by {ctx.author}")
+
         with open(temp_file, 'w') as f:
             f.write(pretty_abi)
 
-        # Send the file in a direct message to the user
         try:
             with open(temp_file, 'rb') as f:
-                await ctx.send(f"Sending ABI JSON  for **{address}** - sent DM to {ctx.author}") 
+                await ctx.send(embed=embed) 
                 await ctx.author.send(file=disnake.File(f))
         except Exception as e:
             print(f"An error occurred when trying to send a message: {e}")
@@ -457,11 +650,11 @@ class Scrape(commands.Cog):
         if blockchain.lower() == "ethereum":
             url = f"https://api.etherscan.io/api?module=gastracker&action=gasoracle&apikey={key2}"
             blockchain_name = "Ethereum"
-            color = Color.blue()  # You can choose a color to represent Ethereum
+            color = Color.blue()
         elif blockchain.lower() == "polygon":
             url = f"https://api.polygonscan.com/api?module=gastracker&action=gasoracle&apikey={key}"
             blockchain_name = "Polygon"
-            color = Color.red()  # You can choose a color to represent Polygon
+            color = Color.red()
         else:
             await inter.response.send_message("Invalid blockchain choice, choose either Ethereum or Polygon")
             return
@@ -492,7 +685,7 @@ class Scrape(commands.Cog):
         embed.add_field(name="Suggested Base Fee", value=data['result']['suggestBaseFee'], inline=False)
         embed.add_field(name="Gas Used Ratio", value=data['result']['gasUsedRatio'], inline=False)
         embed.add_field(name="Conclusion", value=f"Gas is {conclusion}", inline=False)
-        embed.set_footer(text=f"Powered by OvoOno Studio")
+        embed.set_footer(text="Powered by OvoOno Studio")
         
         if 'UsdPrice' in data['result']:
             embed.add_field(name="USD Price", value=f"${data['result']['UsdPrice']}", inline=True)
@@ -508,11 +701,18 @@ class Scrape(commands.Cog):
             description="Return list of ERC-20 transactions, can be filtered by specific smart contract address",
             options=[
                 disnake.Option("address", "Address for scrapping.", type=disnake.OptionType.string, required=True),
-                disnake.Option("contract", "ERC-20 smart contract", type=disnake.OptionType.string, required=True) 
+                disnake.Option("contract", "ERC-20 smart contract", type=disnake.OptionType.string, required=True),
+                disnake.Option(
+                    name="blockchain",
+                    description="Choose Ethereum or Polygon",
+                    type=OptionType.string,
+                    choices=["ethereum", "polygon"],
+                    required=True
+                )
             ]
         ) 
-    async def getErc20(self, ctx, address: str, contract: str = 'SAND', offset: int = 100):
-        await self.handle_erc_transactions(ctx, address, contract, offset, 'ERC20')
+    async def getErc20(self, ctx, address: str, contract: str, blockchain, offset: int = 100):
+        await self.handle_erc_transactions(ctx, address, contract, offset, 'ERC20', blockchain)
 
     """
     Define getErc721() - return list of ERC-721(NFT) transactions, can be filtered by specific smart contract address. 
@@ -523,11 +723,18 @@ class Scrape(commands.Cog):
         description="Return list of ERC-721 transactions, can be filtered by specific smart contract address",
         options=[
             disnake.Option("address", "Address for scrapping.", type=disnake.OptionType.string, required=True),
-            disnake.Option("contract", "ERC-721 smart contract", type=disnake.OptionType.string, required=True)
+            disnake.Option("contract", "ERC-721 smart contract", type=disnake.OptionType.string, required=True),
+            disnake.Option(
+                name="blockchain",
+                description="Choose Ethereum or Polygon",
+                type=OptionType.string,
+                choices=["ethereum", "polygon"],
+                required=True
+            )
         ]
     )
-    async def getErc721(self, ctx, address: str, contract: str, offset: int = 30, contract_type: str = 'ERC721'):
-        await self.handle_erc_transactions(ctx, address, contract, offset, contract_type)
+    async def getErc721(self, ctx, address: str, contract: str, blockchain: str, offset: int = 30, contract_type: str = 'ERC721'):
+        await self.handle_erc_transactions(ctx, address, contract, offset, contract_type, blockchain)
 
     """
     Define getErc1155() - return list of ERC-721 (NFT) transactions, can be filtered by specific smart contract address. 
@@ -538,11 +745,18 @@ class Scrape(commands.Cog):
         description="Return list of ERC-1155 transactions, can be filtered by specific smart contract address",
         options=[
             disnake.Option("address", "Address for scrapping.", type=disnake.OptionType.string, required=True),
-            disnake.Option("contract", "ERC-1155 smart contract", type=disnake.OptionType.string, required=True)
+            disnake.Option("contract", "ERC-1155 smart contract", type=disnake.OptionType.string, required=True),
+            disnake.Option(
+                name="blockchain",
+                description="Choose Ethereum or Polygon",
+                type=OptionType.string,
+                choices=["ethereum", "polygon"],
+                required=True
+            )
         ]
     )
-    async def getErc1155(self, ctx, address: str, contract: str = 'ITEMS', offset: int = 30):
-        await self.handle_erc_transactions(ctx, address, contract, offset, 'ERC1155')
+    async def getErc1155(self, ctx, address: str, contract: str, blockchain: str,  offset: int = 30):
+        await self.handle_erc_transactions(ctx, address, contract, offset, 'ERC1155', blockchain)
     
 def setup(bot):
     bot.add_cog(Scrape(bot))
